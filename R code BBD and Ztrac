@@ -1,0 +1,136 @@
+library(data.table)
+library(RSQLite)
+library(DBI)
+dbdir = "/data/ztrax.db"
+con <- dbConnect(RSQLite::SQLite(),dbdir)
+dbListTables(con)
+df_transmain <- data.table(dbGetQuery(con,"SELECT * FROM ztrans_main LIMIT 10 "))
+str(df_transmain)
+df <- data.table(dbGetQuery(con,"SELECT documenttypestndcode , count(*) FROM ztrans_main group by 1 ORDER BY 1 LIMIT 1000"))
+str(df)
+print(df)
+install.packages('sqldf')
+library(sqldf)
+
+df1 <- sqldf("Select * FROM df ORDER BY 1 DESC COUNT(*) > 10000;")
+print(df1)
+
+df1 = df[df$`COUNT(*)` >= 15000]
+print(df1)
+str(df1)
+
+
+df_date <- data.table(dbGetQuery(con,"SELECT documenttypestndcode ,  count(*) FROM ztrans_main where  loanamount is not NULL and  CAST(recordingdate AS DATE FORMAT 'MM-DD-YYYY') between 2008 and 2018 group by 1 ORDER BY 1"))
+df_date
+
+df_distinct_loan <- data.table(dbGetQuery(con,"SELECT distinct loanamount FROM ztrans_main    and  CAST(recordingdate AS DATE FORMAT 'MM-DD-YYYY') between 2008 and 2018 group by 1 ORDER BY 1"))
+
+
+df_sale <- data.table(dbGetQuery(con,"SELECT * FROM ztrans_main limit 10"))
+
+
+str(df_sale)
+## df for transactions
+
+df_property_info <- data.table(dbGetQuery(con,"SELECT * FROM ztrans_propertyinfo limit 10"))
+
+
+str(df_property_info)
+
+## df for housing
+df_main <- data.table(dbGetQuery(con,"SELECT * FROM zasmt_main limit 10"))
+str(df_main)
+
+### Joining
+df_join_deed <- data.table(dbGetQuery(con,
+                        "SELECT
+                         a.transid,
+                         a.salespriceamount,
+                         a.loanamount,
+                         a.documentdate,
+                         a.recordingdate,
+                         a.recordingdocumentnumber,
+                         c.fips,
+                         c.statefips,
+                         c.importparcelid,
+                         c.propertyfullstreetaddress,
+                         c.propertycity,
+                         c.propertystate,
+                         c.propertyzip,
+                         c.propertyzip4,
+                         c.lotsizesquarefeet  
+                          FROM ztrans_main as a
+                          JOIN ztrans_propertyinfo b
+                          ON b.transid=a.transid
+                          JOIN zasmt_main c
+                ON c.importparcelid= b.importparcelid
+      WHERE 1=1
+                AND        CAST(a.recordingdate AS DATE )between 2008 and 2018
+                AND        a.documenttypestndcode = 'DEED'
+                AND        a.loanamount is not NULL
+                AND    a.loanamount between 10000 and 30000000
+                AND        a.salespriceamount is not NULL
+                AND        b.assessmentrecordmatchflag = 1 " ))
+
+write.csv(df_join_deed, "df_join_deed.csv")
+str(ztrans_main)
+head(df_join_mtge)
+summary(df_join_mtge)
+df_join_mtge$salespriceamount
+
+df_loan <- data.table(dbGetQuery(con,
+                                 "SELECT loanamount, COUNT(transid)
+                         FROM ztrans_main
+                WHERE          CAST(recordingdate AS DATE )between 2008 and 2018
+                AND    loanamount is between 10000 and 30000000
+                AND        documenttypestndcode = 'MTGE'
+                AND        loanamount is not NULL
+                AND        salespriceamount is not NULL
+                                 GROUP BY 1 ORDER BY 1 "))
+               
+df_join_deed_year <- sqldf("SELECT * , CAST(recordingdate AS DATE ) AS year FROM df_join_deed;")
+
+
+df_deed_final <- sqldf("SELECT fips, statefips, year, SUM(salespriceamount) OVER(PARTITION BY fips, year) total_sales_price,
+                                               SUM(loanamount) OVER(PARTITION BY fips, year) total_loan_amount FROM df_join_deed_year GROUP BY 1,2,3;")
+
+df_deed_dist <- sqldf("SELECT COUNT(Distinct year) from df_deed_final;")
+print(df_deed_dist)
+
+install.packages("stringr")
+library(stringr)
+
+##### git data
+url= "https://raw.githubusercontent.com/rjosh15/Broadband-data-by-county-and-income/main/df_final_income_population_updated.csv"
+fread(url)
+df_git<- fread(url)
+
+df_deed_final$countyfips <- str_sub(df_deed_final$fips, -3)
+tail(df_deed_final)  
+
+df_deed_final$countyfips <- as.numeric(str_replace_all(df_deed_final$countyfips,"0",""))
+
+head(df_deed_final)
+#### merge
+merge_df <- merge(df_git, df_deed_final, by.x = "countycode" ,  by.y = "fips")
+### filtering on month=12
+df_git_filter <- df_git[df_git$month == 12]
+library(dplyr)
+
+### final merge humda_deed with bbd
+new_df_mergehumda <- inner_join(df_git_filter, df_deed_final, by = c("countycode" = "fips", "state" = "statefips", "year" = "year"))
+write.csv(new_df_mergehumda, "new_df_mergehumda.csv")
+head(new_df_mergehumda)
+
+
+str(new_df_mergehumda)
+#### convert char to numeric
+new_df_mergehumda$median_income <- as.numeric(gsub(",","",new_df_mergehumda$median_income))
+
+#### regress model
+df_lm <- new_df_mergehumda[c('countycode', 'statecode', 'county.x', 'statename','countyname','ratio',)]
+
+df_lm_model <- lm(new_df_mergehumda$total_loan_amount~new_df_mergehumda$median_income+new_df_mergehumda$absolute_penetration+new_df_mergehumda$poverty_percentage, dataset = new_df_mergehumda)
+write.csv(df_lm_model, "df_lm_model.csv")
+summary(df_lm_model)
+nrow(new_df)
